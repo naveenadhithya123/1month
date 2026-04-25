@@ -36,15 +36,28 @@ CLIENT_URL=http://localhost:5173
 GROQ_API_KEY=
 GROQ_CHAT_MODEL=openai/gpt-oss-120b
 
+HF_TOKEN=
+HF_VISION_MODEL=Qwen/Qwen2.5-VL-7B-Instruct
+HF_EMBEDDING_MODEL=sentence-transformers/all-MiniLM-L6-v2
+HF_STT_MODEL=openai/whisper-large-v3-turbo
+HF_TTS_MODEL=hexgrad/Kokoro-82M
+
 OCR_SPACE_API_KEY=helloworld
 
 SUPABASE_URL=
+SUPABASE_ANON_KEY=
 SUPABASE_SERVICE_ROLE_KEY=
+
+CLOUDINARY_CLOUD_NAME=
+CLOUDINARY_API_KEY=
+CLOUDINARY_API_SECRET=
 
 BREVO_API_KEY=
 BREVO_SENDER_EMAIL=
 BREVO_SENDER_NAME=Invoice Reconciliation AI
 ```
+
+Groq is the only chat model provider. HF is kept for voice, image reading, embeddings, and document helpers. Image generation uses SVG/Pollinations, not a separate paid image API.
 
 ## Frontend Setup
 

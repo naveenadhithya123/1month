@@ -2,7 +2,15 @@ import "dotenv/config";
 import cors from "cors";
 import express from "express";
 
+import authRoutes from "./routes/auth.routes.js";
+import chatRoutes from "./routes/chat.routes.js";
+import documentRoutes from "./routes/document.routes.js";
+import emailRoutes from "./routes/email.routes.js";
+import imageRoutes from "./routes/image.routes.js";
+import quizRoutes from "./routes/quiz.routes.js";
 import reconciliationRoutes from "./routes/reconciliation.routes.js";
+import speechRoutes from "./routes/speech.routes.js";
+import { optionalAuth } from "./middleware/auth.middleware.js";
 import { apiLimiter } from "./middleware/rateLimit.middleware.js";
 
 const app = express();
@@ -46,6 +54,7 @@ app.use(
 );
 app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
+app.use(optionalAuth);
 app.use("/api", apiLimiter);
 
 app.get("/api/health", (_req, res) => {
@@ -56,7 +65,14 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
+app.use("/api/auth", authRoutes);
+app.use("/api/chat", chatRoutes);
+app.use("/api/documents", documentRoutes);
+app.use("/api/email", emailRoutes);
+app.use("/api/images", imageRoutes);
+app.use("/api/quizzes", quizRoutes);
 app.use("/api/reconciliation", reconciliationRoutes);
+app.use("/api/speech", speechRoutes);
 
 app.use((req, res) => {
   res.status(404).json({

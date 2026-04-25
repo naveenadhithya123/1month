@@ -16,11 +16,35 @@ services:
         sync: false
       - key: GROQ_CHAT_MODEL
         value: openai/gpt-oss-120b
+      - key: HF_TOKEN
+        sync: false
+      - key: HF_VISION_MODEL
+        value: Qwen/Qwen2.5-VL-7B-Instruct
+      - key: HF_EMBEDDING_MODEL
+        value: sentence-transformers/all-MiniLM-L6-v2
+      - key: HF_STT_MODEL
+        value: openai/whisper-large-v3-turbo
+      - key: HF_TTS_MODEL
+        value: hexgrad/Kokoro-82M
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GEMINI_CHAT_MODEL
+        value: gemini-2.0-flash-lite
+      - key: GEMINI_BACKUP_CHAT_MODEL
+        value: gemini-2.0-flash
       - key: OCR_SPACE_API_KEY
         value: helloworld
       - key: SUPABASE_URL
         sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
       - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
         sync: false
       - key: BREVO_API_KEY
         sync: false

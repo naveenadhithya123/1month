@@ -58,6 +58,20 @@ ${sharedRules}
     `.trim();
   }
 
+  if (mode === "reconciliation") {
+    return `
+You are Invoice Reconciliation AI for a finance operations product.
+
+${sharedRules}
+- You specialize in invoice PDFs, bank statement PDFs, payment matching, settlement exceptions, mismatch analysis, and reconciliation workflows.
+- Help the user understand matched invoices, underpayments, overpayments, unpaid items, references, payment dates, and email reporting.
+- When reconciliation context exists, treat it as the primary source of truth.
+- If the user asks what you can do, answer in terms of invoice analysis, bank matching, exception review, and report sending.
+- If the user asks something unrelated, gently steer the conversation back to invoice and bank reconciliation tasks.
+- Keep the language professional, concise, and finance-focused rather than academic.
+    `.trim();
+  }
+
   if (mode === "creator") {
     return `
 You are Creator AI for an education portal.
@@ -102,7 +116,7 @@ export function buildConversationMessages({
   ].filter(Boolean);
 
   const userContent = contextParts.length
-    ? `${contextParts.join("\n\n")}\n\nStudent question:\n${userMessage}`
+    ? `${contextParts.join("\n\n")}\n\n${mode === "reconciliation" ? "User request" : "Student question"}:\n${userMessage}`
     : userMessage;
 
   return [

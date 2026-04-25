@@ -155,10 +155,14 @@ function buildSimpleChatReply(message = "") {
     return "Okay. Tell me what you want to do next, and I'll help you step by step.";
   }
 
-  return "Hi. What would you like help with today: study, coding, documents, file creation, quiz prep, or images?";
+  return "Hi. I can help you upload invoice and bank PDFs, analyze matched and mismatched payments, explain exceptions, and send the reconciliation report by email.";
 }
 
 function buildModeRefusal(mode = "study") {
+  if (mode === "reconciliation") {
+    return "I'm Invoice Reconciliation AI. I help with invoice PDFs, bank statements, payment matching, exception review, and reconciliation reports.";
+  }
+
   if (mode === "coding") {
     return "I'm Code AI. I can help with coding, debugging, algorithms, websites, apps, and programming concepts only.";
   }
@@ -269,12 +273,20 @@ function buildLocalFallbackAnswer(message = "", mode = "study", userEmail = "") 
   }
 
   if (/\bwho are you|what are you\b/i.test(normalized)) {
+    if (mode === "reconciliation") {
+      return "I'm Invoice Reconciliation AI. I help compare invoice PDFs against bank statement PDFs, explain mismatches, and support report delivery by email.";
+    }
+
     return mode === "coding"
       ? "I'm Code AI. I help with programming, debugging, websites, apps, algorithms, and code explanations."
       : "I'm AI Hackathon. I help with study questions, coding help, document work, quizzes, and basic explanations.";
   }
 
   if (/\bwhat can you do|how can you help\b/i.test(normalized)) {
+    if (mode === "reconciliation") {
+      return "I can help you upload invoice and bank PDFs, analyze matched and mismatched settlements, explain underpaid or unpaid invoices, summarize the reconciliation result, and send the PDF report by email.";
+    }
+
     return "I can help with study explanations, coding questions, website code, document summaries, quiz prep, and downloadable files. Right now I am using fallback mode, so simple answers work best.";
   }
 
@@ -304,6 +316,10 @@ function buildLocalFallbackAnswer(message = "", mode = "study", userEmail = "") 
 
   if (/\bhero of (nanban|nunbam|namban)\b/i.test(normalized)) {
     return "If you mean the Tamil movie Nanban, the lead hero is Vijay. He plays Panchavan Parivendhan, the remake version of Rancho.";
+  }
+
+  if (mode === "reconciliation") {
+    return "I'm still here to help with this reconciliation workflow. You can ask me to analyze the uploaded PDFs, explain any mismatch, summarize the exception table, or send the report to an email address.";
   }
 
   return "The AI providers are unavailable right now, but the app is still running. Try a simpler question like `what is HTML`, `what is a tree`, `who are you`, or switch to document/image features for the demo.";
@@ -379,6 +395,10 @@ function isCreatorFollowUpPrompt(message = "", history = []) {
 }
 
 function buildAutomaticDocumentPrompt(mode = "study") {
+  if (mode === "reconciliation") {
+    return "Read the uploaded invoice or bank document and extract the finance details directly. Focus on invoice number, company name, reference, invoice amount, payment date, paid amount, mismatch reason, and reconciliation-ready summary.";
+  }
+
   if (mode === "coding") {
     return "Read the uploaded file and directly solve or explain the coding content. Start with the main answer first, then provide clean code blocks and a short explanation.";
   }

@@ -186,7 +186,7 @@ export default function App() {
     sendChatMessage({
       message: prompt,
       history,
-      mode: analysis ? "documents" : "study",
+      mode: "reconciliation",
     })
       .then((response) => {
         addMessage(

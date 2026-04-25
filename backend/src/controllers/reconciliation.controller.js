@@ -231,6 +231,78 @@ function extractBankTransactions(bankText = "") {
   return transactions;
 }
 
+function extractReferenceContext(bankText = "", invoice) {
+  const normalizedText = String(bankText || "").replace(/\s+/g, " ").trim();
+  if (!normalizedText) {
+    return { snippet: "", paymentDate: "-" };
+  }
+
+  const reference = String(invoice?.reference || "").trim();
+  const company = String(invoice?.companyName || "").trim();
+  const lookups = [reference, company].filter(Boolean);
+  let hitIndex = -1;
+
+  for (const lookup of lookups) {
+    const index = normalizedText.toLowerCase().indexOf(lookup.toLowerCase());
+    if (index >= 0) {
+      hitIndex = index;
+      break;
+    }
+  }
+
+  if (hitIndex < 0) {
+    return { snippet: "", paymentDate: "-" };
+  }
+
+  const start = Math.max(0, hitIndex - 120);
+  const end = Math.min(normalizedText.length, hitIndex + 220);
+  const snippet = normalizedText.slice(start, end);
+  const dateMatches = [...snippet.matchAll(/\b(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{4}-\d{2}-\d{2})\b/g)];
+  const paymentDate = dateMatches.length ? formatIsoDate(dateMatches[0][1]) : "-";
+
+  return { snippet, paymentDate };
+}
+
+function pickClosestAmount(amounts = [], target = 0) {
+  if (!amounts.length) {
+    return 0;
+  }
+
+  return amounts.reduce((best, current) => {
+    if (!best) {
+      return current;
+    }
+
+    const currentGap = Math.abs(current - target);
+    const bestGap = Math.abs(best - target);
+    return currentGap < bestGap ? current : best;
+  }, 0);
+}
+
+function extractAmountFromReferenceContext(invoice, bankText = "") {
+  const { snippet, paymentDate } = extractReferenceContext(bankText, invoice);
+  if (!snippet) {
+    return null;
+  }
+
+  const amounts = [...snippet.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+  if (!amounts.length) {
+    return null;
+  }
+
+  const filtered = amounts.filter((amount) => amount > 0 && amount <= Math.max(invoice.invoiceAmount * 2, invoice.invoiceAmount + 50000));
+  const chosen = pickClosestAmount(filtered.length ? filtered : amounts, invoice.invoiceAmount);
+  if (!chosen) {
+    return null;
+  }
+
+  return {
+    paidAmount: chosen,
+    paymentDate,
+    snippet,
+  };
+}
+
 function scoreTransactionAgainstInvoice(invoice, transaction) {
   const referenceSlug = slug(invoice.reference);
   const invoiceSlug = slug(invoice.invoiceNo);
@@ -301,8 +373,19 @@ function findBankMatch(invoice, bankText = "") {
     .slice(0, 3);
 
   let bestMatch = null;
+  const localContextMatch = extractAmountFromReferenceContext(invoice, bankText);
 
   bestMatch = pickBestTransaction(invoice, transactions);
+
+  if (localContextMatch && (!bestMatch || Math.abs(localContextMatch.paidAmount - invoice.invoiceAmount) < Math.abs(bestMatch.paidAmount - invoice.invoiceAmount))) {
+    bestMatch = {
+      line: localContextMatch.snippet,
+      score: 999,
+      paidAmount: localContextMatch.paidAmount,
+      paymentDate: localContextMatch.paymentDate,
+      confidence: "high",
+    };
+  }
 
   if (bestMatch) {
     return bestMatch;
@@ -387,21 +470,25 @@ function repairBalanceMisreads(rows = [], parsedInvoices = [], bankText = "") {
     }
 
     const transaction = pickBestTransaction(invoice, transactions);
+    const localContextMatch = extractAmountFromReferenceContext(invoice, bankText);
     if (!transaction) {
-      return row;
+      if (!localContextMatch) {
+        return row;
+      }
     }
 
     const currentPaidAmount = Number(row.paidAmount || 0);
     const currentDifference = Number(row.difference ?? currentPaidAmount - Number(row.invoiceAmount || 0));
+    const correctedPaidAmount = localContextMatch?.paidAmount || transaction?.paidAmount || currentPaidAmount;
     const looksLikeBalanceMisread =
       currentPaidAmount > invoice.invoiceAmount * 2 ||
-      (transaction.balance && Math.abs(currentPaidAmount - transaction.balance) < 0.01);
+      (transaction?.balance && Math.abs(currentPaidAmount - transaction.balance) < 0.01) ||
+      Math.abs(correctedPaidAmount - invoice.invoiceAmount) < Math.abs(currentPaidAmount - invoice.invoiceAmount);
 
     if (!looksLikeBalanceMisread) {
       return row;
     }
 
-    const correctedPaidAmount = transaction.paidAmount;
     const correctedDifference = correctedPaidAmount - invoice.invoiceAmount;
     let status = "matched";
     let issue = "";
@@ -428,12 +515,12 @@ function repairBalanceMisreads(rows = [], parsedInvoices = [], bankText = "") {
       ...row,
       companyName: invoice.companyName,
       invoiceDate: invoice.invoiceDate,
-      paymentDate: transaction.paymentDate || row.paymentDate || "-",
+      paymentDate: localContextMatch?.paymentDate || transaction?.paymentDate || row.paymentDate || "-",
       paidAmount: correctedPaidAmount,
       difference: correctedDifference,
       status,
       issue,
-      confidence: transaction.confidence || row.confidence || "high",
+      confidence: transaction?.confidence || row.confidence || "high",
     };
   });
 }

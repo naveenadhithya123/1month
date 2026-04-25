@@ -115,7 +115,7 @@ export async function sendEmail({ to, subject, html, text, attachments = [] }) {
       body: JSON.stringify({
         sender: {
           email: process.env.BREVO_SENDER_EMAIL,
-          name: process.env.BREVO_SENDER_NAME || "Edu AI Tutor",
+          name: process.env.BREVO_SENDER_NAME || "Invoice Reconciliation AI",
         },
         to: [{ email: to }],
         subject,

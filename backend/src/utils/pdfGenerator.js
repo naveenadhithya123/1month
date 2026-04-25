@@ -1,4 +1,4 @@
-function normalizePdfText(text = "") {
+export function normalizePdfText(text = "") {
   return String(text)
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u201C\u201D]/g, '"')
@@ -8,7 +8,7 @@ function normalizePdfText(text = "") {
     .replace(/[^\x0A\x0D\x20-\x7E]/g, "");
 }
 
-function escapePdfText(text = "") {
+export function escapePdfText(text = "") {
   return normalizePdfText(text)
     .replaceAll("\\", "\\\\")
     .replaceAll("(", "\\(")
@@ -23,7 +23,7 @@ function stripInlineMarkdown(text = "") {
     .replace(/\[(.*?)\]\((.*?)\)/g, "$1");
 }
 
-function wrapText(text = "", maxLineLength = 88) {
+export function wrapText(text = "", maxLineLength = 88) {
   const lines = [];
 
   for (const paragraph of String(text).split(/\r?\n/)) {
@@ -249,7 +249,7 @@ function buildPageStream(lines = []) {
     .join("\n");
 }
 
-function buildPdfFromPages(pageStreams = []) {
+export function buildPdfFromPages(pageStreams = []) {
   const objects = [];
   const pageObjectIds = [];
   const fontObjectId = 3 + pageStreams.length * 2;

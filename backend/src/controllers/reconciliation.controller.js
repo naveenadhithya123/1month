@@ -151,49 +151,6 @@ function extractTransactionAmount(line = "", invoiceAmount = 0) {
   }, 0);
 }
 
-function collectAmountCandidates(lines = [], invoiceAmount = 0, anchorIndex = 0) {
-  const candidates = [];
-
-  lines.forEach((line, index) => {
-    const text = String(line || "");
-    if (!text.trim() || /opening balance|closing balance/i.test(text)) {
-      return;
-    }
-
-    const amounts = [...text.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
-    const trimmedAmounts = amounts.length > 1 ? amounts.slice(0, -1) : amounts;
-
-    trimmedAmounts.forEach((amount) => {
-      const distancePenalty = Math.abs(index - anchorIndex) * 250;
-      const oversizePenalty = amount > invoiceAmount * 2 ? amount - invoiceAmount * 2 : 0;
-      const laterLinePenalty = index > anchorIndex + 1 && amount > invoiceAmount * 1.15 ? invoiceAmount * 0.75 : 0;
-      const mismatchPenalty = invoiceAmount ? Math.abs(amount - invoiceAmount) : 0;
-
-      candidates.push({
-        amount,
-        text,
-        score: mismatchPenalty + distancePenalty + oversizePenalty + laterLinePenalty,
-      });
-    });
-  });
-
-  return candidates.sort((a, b) => a.score - b.score);
-}
-
-function extractTransactionAmountFromWindow(lines = [], invoiceAmount = 0, anchorIndex = 0) {
-  const candidates = collectAmountCandidates(lines, invoiceAmount, anchorIndex);
-  if (!candidates.length) {
-    return 0;
-  }
-
-  const best = candidates[0];
-  if (invoiceAmount > 0 && best.amount > invoiceAmount * 5) {
-    return 0;
-  }
-
-  return best.amount;
-}
-
 function extractLineDate(line = "") {
   const match = String(line || "").match(/(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{4}-\d{2}-\d{2})/);
   return formatIsoDate(match?.[1] || "-");
@@ -219,7 +176,63 @@ function extractDateFromWindow(lines = [], anchorIndex = 0) {
   return "-";
 }
 
+function extractBankTransactions(bankText = "") {
+  const normalized = String(bankText || "")
+    .replace(/\r/g, "\n")
+    .replace(/\t/g, " ")
+    .replace(/[ ]{2,}/g, " ")
+    .replace(/\n{2,}/g, "\n")
+    .trim();
+
+  if (!normalized) {
+    return [];
+  }
+
+  const datePattern = "\\d{1,2}\\s+[A-Za-z]{3}\\s+\\d{4}";
+  const rowPattern = new RegExp(
+    `(${datePattern})\\s+(${datePattern})([\\s\\S]*?)(?=(?:${datePattern})\\s+(?:${datePattern})|$)`,
+    "g",
+  );
+  const transactions = [];
+
+  for (const match of normalized.matchAll(rowPattern)) {
+    const txnDate = formatIsoDate(match[1]);
+    const valueDate = formatIsoDate(match[2]);
+    const segment = String(match[3] || "").replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
+
+    if (!segment || /opening balance|closing balance/i.test(segment)) {
+      continue;
+    }
+
+    const amounts = [...segment.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((entry) => parseAmount(entry[1]));
+    if (!amounts.length) {
+      continue;
+    }
+
+    const balance = amounts.length >= 2 ? amounts.at(-1) : 0;
+    const transactionAmount = amounts.length >= 2 ? amounts.at(-2) : amounts[0];
+    const description = segment.replace(/([\d,]+\.\d{2}\s*)+$/g, "").trim();
+
+    if (!description || !transactionAmount) {
+      continue;
+    }
+
+    transactions.push({
+      txnDate,
+      valueDate,
+      paymentDate: valueDate !== "-" ? valueDate : txnDate,
+      description,
+      descriptionSlug: slug(description),
+      amount: transactionAmount,
+      balance,
+    });
+  }
+
+  return transactions;
+}
+
 function findBankMatch(invoice, bankText = "") {
+  const transactions = extractBankTransactions(bankText);
   const lines = String(bankText || "")
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -232,6 +245,43 @@ function findBankMatch(invoice, bankText = "") {
     .slice(0, 3);
 
   let bestMatch = null;
+
+  for (const transaction of transactions) {
+    let score = 0;
+
+    if (referenceSlug && transaction.descriptionSlug.includes(referenceSlug)) {
+      score += 18;
+    }
+    if (invoiceSlug && transaction.descriptionSlug.includes(invoiceSlug)) {
+      score += 12;
+    }
+
+    for (const token of companyTokens) {
+      if (transaction.descriptionSlug.includes(token)) {
+        score += 4;
+      }
+    }
+
+    if (score < 8) {
+      continue;
+    }
+
+    const candidate = {
+      line: transaction.description,
+      score: score + (Math.abs(transaction.amount - invoice.invoiceAmount) <= invoice.invoiceAmount * 0.1 ? 2 : 0),
+      paidAmount: transaction.amount,
+      paymentDate: transaction.paymentDate,
+      confidence: score >= 18 ? "high" : "medium",
+    };
+
+    if (!bestMatch || candidate.score > bestMatch.score) {
+      bestMatch = candidate;
+    }
+  }
+
+  if (bestMatch) {
+    return bestMatch;
+  }
 
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index];
@@ -259,9 +309,21 @@ function findBankMatch(invoice, bankText = "") {
     const windowEnd = Math.min(lines.length, index + 4);
     const windowLines = lines.slice(windowStart, windowEnd);
     const anchorIndex = index - windowStart;
-    const amount =
-      extractTransactionAmountFromWindow(windowLines, invoice.invoiceAmount, anchorIndex) ||
-      extractTransactionAmount(line, invoice.invoiceAmount);
+    const candidateAmounts = windowLines
+      .flatMap((entry, localIndex) => {
+        const amounts = [...String(entry || "").matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+        const usableAmounts = amounts.length > 1 ? amounts.slice(0, -1) : amounts;
+
+        return usableAmounts.map((amount) => ({
+          amount,
+          score:
+            Math.abs(amount - invoice.invoiceAmount) +
+            Math.abs(localIndex - anchorIndex) * 250 +
+            (amount > invoice.invoiceAmount * 2 ? amount - invoice.invoiceAmount * 2 : 0),
+        }));
+      })
+      .sort((left, right) => left.score - right.score);
+    const amount = candidateAmounts[0]?.amount || extractTransactionAmount(line, invoice.invoiceAmount);
     if (!amount) {
       continue;
     }

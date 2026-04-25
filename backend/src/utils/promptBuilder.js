@@ -101,6 +101,7 @@ export function buildConversationMessages({
   userMessage,
   retrievedContext = "",
   chatMemory = "",
+  mode = "study",
 }) {
   const safeHistory = history
     .filter((item) => item?.role && (item?.content || item?.attachments?.length || item?.fileName))
@@ -112,7 +113,9 @@ export function buildConversationMessages({
 
   const contextParts = [
     chatMemory ? `Chat memory and follow-up state:\n${chatMemory}` : "",
-    retrievedContext ? `Use this retrieved study context when relevant:\n${retrievedContext}` : "",
+    retrievedContext
+      ? `Use this retrieved ${mode === "reconciliation" ? "reconciliation" : "study"} context when relevant:\n${retrievedContext}`
+      : "",
   ].filter(Boolean);
 
   const userContent = contextParts.length

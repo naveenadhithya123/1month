@@ -587,6 +587,7 @@ Prefer one complete working solution over a partial solution with explanation fi
       userMessage: responseFocusedMessage,
       retrievedContext,
       chatMemory: chatMemory.summaryText,
+      mode,
     });
 
     const modeRefusal =
@@ -638,6 +639,7 @@ Do not explain how to make the file.
 Do not add instructions.
 If the user asks for one word or one short sentence only, output exactly that content only.`,
             retrievedContext,
+            mode,
           }),
           maxTokens: 1800,
         });

@@ -151,7 +151,7 @@ function extractTransactionAmount(line = "", invoiceAmount = 0) {
   }, 0);
 }
 
-function collectAmountCandidates(lines = [], invoiceAmount = 0) {
+function collectAmountCandidates(lines = [], invoiceAmount = 0, anchorIndex = 0) {
   const candidates = [];
 
   lines.forEach((line, index) => {
@@ -161,20 +161,18 @@ function collectAmountCandidates(lines = [], invoiceAmount = 0) {
     }
 
     const amounts = [...text.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
-    amounts.forEach((amount, amountIndex) => {
-      const amountText = amount.toLocaleString("en-US", {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-      const isLikelyBalance = /balance/i.test(text) || amountIndex === amounts.length - 1;
-      const distancePenalty = Math.abs(index - 1) * 150;
-      const balancePenalty = isLikelyBalance ? Math.max(invoiceAmount, amount * 0.35) : 0;
-      const oversizePenalty = amount > invoiceAmount * 3 ? amount - invoiceAmount * 3 : 0;
+    const trimmedAmounts = amounts.length > 1 ? amounts.slice(0, -1) : amounts;
+
+    trimmedAmounts.forEach((amount) => {
+      const distancePenalty = Math.abs(index - anchorIndex) * 250;
+      const oversizePenalty = amount > invoiceAmount * 2 ? amount - invoiceAmount * 2 : 0;
+      const laterLinePenalty = index > anchorIndex + 1 && amount > invoiceAmount * 1.15 ? invoiceAmount * 0.75 : 0;
+      const mismatchPenalty = invoiceAmount ? Math.abs(amount - invoiceAmount) : 0;
 
       candidates.push({
         amount,
         text,
-        score: Math.abs(amount - invoiceAmount) + distancePenalty + balancePenalty + oversizePenalty,
+        score: mismatchPenalty + distancePenalty + oversizePenalty + laterLinePenalty,
       });
     });
   });
@@ -182,8 +180,8 @@ function collectAmountCandidates(lines = [], invoiceAmount = 0) {
   return candidates.sort((a, b) => a.score - b.score);
 }
 
-function extractTransactionAmountFromWindow(lines = [], invoiceAmount = 0) {
-  const candidates = collectAmountCandidates(lines, invoiceAmount);
+function extractTransactionAmountFromWindow(lines = [], invoiceAmount = 0, anchorIndex = 0) {
+  const candidates = collectAmountCandidates(lines, invoiceAmount, anchorIndex);
   if (!candidates.length) {
     return 0;
   }
@@ -201,8 +199,17 @@ function extractLineDate(line = "") {
   return formatIsoDate(match?.[1] || "-");
 }
 
-function extractDateFromWindow(lines = []) {
-  for (const line of lines) {
+function extractDateFromWindow(lines = [], anchorIndex = 0) {
+  const orderedIndexes = Array.from({ length: lines.length }, (_, index) => index).sort(
+    (left, right) => Math.abs(left - anchorIndex) - Math.abs(right - anchorIndex),
+  );
+
+  for (const index of orderedIndexes) {
+    const line = lines[index];
+    if (/opening balance|closing balance/i.test(String(line || ""))) {
+      continue;
+    }
+
     const value = extractLineDate(line);
     if (value && value !== "-") {
       return value;
@@ -248,9 +255,12 @@ function findBankMatch(invoice, bankText = "") {
       continue;
     }
 
-    const windowLines = lines.slice(Math.max(0, index - 1), Math.min(lines.length, index + 2));
+    const windowStart = Math.max(0, index - 2);
+    const windowEnd = Math.min(lines.length, index + 4);
+    const windowLines = lines.slice(windowStart, windowEnd);
+    const anchorIndex = index - windowStart;
     const amount =
-      extractTransactionAmountFromWindow(windowLines, invoice.invoiceAmount) ||
+      extractTransactionAmountFromWindow(windowLines, invoice.invoiceAmount, anchorIndex) ||
       extractTransactionAmount(line, invoice.invoiceAmount);
     if (!amount) {
       continue;
@@ -260,7 +270,7 @@ function findBankMatch(invoice, bankText = "") {
       line,
       score,
       paidAmount: amount,
-      paymentDate: extractDateFromWindow(windowLines) || extractLineDate(line),
+      paymentDate: extractDateFromWindow(windowLines, anchorIndex) || extractLineDate(line),
       confidence: score >= 14 ? "high" : "medium",
     };
 

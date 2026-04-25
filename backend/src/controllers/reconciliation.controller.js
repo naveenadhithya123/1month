@@ -39,12 +39,63 @@ function formatIsoDate(raw = "") {
     return text;
   }
 
+  const dayMonthYear = text.match(/^(\d{1,2})\s+([A-Za-z]{3})\s+(\d{4})$/);
+  if (dayMonthYear) {
+    const [, day, monthText, year] = dayMonthYear;
+    const monthMap = {
+      jan: "01",
+      feb: "02",
+      mar: "03",
+      apr: "04",
+      may: "05",
+      jun: "06",
+      jul: "07",
+      aug: "08",
+      sep: "09",
+      oct: "10",
+      nov: "11",
+      dec: "12",
+    };
+    const month = monthMap[monthText.toLowerCase()];
+    if (month) {
+      return `${year}-${month}-${String(day).padStart(2, "0")}`;
+    }
+  }
+
   const parsed = new Date(text);
   if (Number.isNaN(parsed.getTime())) {
     return text;
   }
 
   return parsed.toISOString().slice(0, 10);
+}
+
+function normalizeInvoiceBlock(block = "") {
+  return String(block || "")
+    .replace(/\r/g, "\n")
+    .replace(/\|/g, "\n")
+    .replace(/\s{2,}/g, " ")
+    .replace(/(Invoice\s*No\s*:|Bill\s*To\s*:|Customer\s*Name\s*:|Reference\s*:|Invoice\s*Date\s*:|Due\s*Date\s*:|Currency\s*:)/gi, "\n$1")
+    .replace(/\n+/g, "\n")
+    .trim();
+}
+
+function extractField(block = "", labels = []) {
+  for (const label of labels) {
+    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const match = block.match(
+      new RegExp(
+        `${escaped}\\s*:\\s*([\\s\\S]*?)(?=\\n(?:Invoice\\s*No|Bill\\s*To|Customer\\s*Name|Reference|Invoice\\s*Date|Due\\s*Date|Currency)\\s*:|$)`,
+        "i",
+      ),
+    );
+    const value = match?.[1]?.replace(/\s+/g, " ").trim();
+    if (value) {
+      return value;
+    }
+  }
+
+  return "";
 }
 
 function extractInvoiceRecords(invoiceText = "") {
@@ -54,15 +105,13 @@ function extractInvoiceRecords(invoiceText = "") {
 
   return blocks
     .map((block, index) => {
-      const invoiceNo = block.match(/Invoice\s*No\s*:\s*([A-Z0-9/-]+)/i)?.[1]?.trim() || "";
-      const companyName =
-        block.match(/Bill\s*To\s*:\s*([^\n|]+)/i)?.[1]?.trim() ||
-        block.match(/Customer\s*Name\s*:\s*([^\n|]+)/i)?.[1]?.trim() ||
-        "";
-      const reference = block.match(/Reference\s*:\s*([A-Z0-9/-]+)/i)?.[1]?.trim() || "";
-      const invoiceDate = block.match(/Invoice\s*Date\s*:\s*([^\n|]+)/i)?.[1]?.trim() || "-";
-      const totals = [...block.matchAll(/(?:TOTAL|Grand Total)[^\d]*([\d,]+\.\d{2})/gi)].map((match) => parseAmount(match[1]));
-      const fallbackAmounts = [...block.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+      const normalizedBlock = normalizeInvoiceBlock(block);
+      const invoiceNo = extractField(normalizedBlock, ["Invoice No"]).match(/[A-Z0-9/-]+/i)?.[0]?.trim() || "";
+      const companyName = extractField(normalizedBlock, ["Bill To", "Customer Name"]);
+      const reference = extractField(normalizedBlock, ["Reference"]).match(/[A-Z0-9/-]+/i)?.[0]?.trim() || "";
+      const invoiceDate = extractField(normalizedBlock, ["Invoice Date"]) || "-";
+      const totals = [...normalizedBlock.matchAll(/(?:TOTAL|Grand Total)[^\d]*([\d,]+\.\d{2})/gi)].map((match) => parseAmount(match[1]));
+      const fallbackAmounts = [...normalizedBlock.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
       const invoiceAmount = totals.at(-1) || fallbackAmounts.at(-1) || 0;
 
       if (!invoiceNo || !companyName || !invoiceAmount) {
@@ -81,7 +130,7 @@ function extractInvoiceRecords(invoiceText = "") {
     .filter(Boolean);
 }
 
-function extractTransactionAmount(line = "") {
+function extractTransactionAmount(line = "", invoiceAmount = 0) {
   const matches = [...String(line || "").matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
   if (!matches.length) {
     return 0;
@@ -91,7 +140,15 @@ function extractTransactionAmount(line = "") {
     return matches[0];
   }
 
-  return matches[0];
+  return matches.reduce((best, current) => {
+    if (!best) {
+      return current;
+    }
+
+    const currentGap = Math.abs(current - invoiceAmount);
+    const bestGap = Math.abs(best - invoiceAmount);
+    return currentGap < bestGap ? current : best;
+  }, 0);
 }
 
 function extractLineDate(line = "") {
@@ -134,7 +191,7 @@ function findBankMatch(invoice, bankText = "") {
       continue;
     }
 
-    const amount = extractTransactionAmount(line);
+    const amount = extractTransactionAmount(line, invoice.invoiceAmount);
     if (!amount) {
       continue;
     }

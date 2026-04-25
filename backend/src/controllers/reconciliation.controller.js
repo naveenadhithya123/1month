@@ -196,31 +196,27 @@ function extractBankTransactions(bankText = "") {
   }
 
   const datePattern = "\\d{1,2}\\s+[A-Za-z]{3}\\s+\\d{4}";
-  const rowPattern = new RegExp(
+  const transactions = [];
+
+  const doubleDatePattern = new RegExp(
     `(${datePattern})\\s+(${datePattern})([\\s\\S]*?)(?=(?:${datePattern})\\s+(?:${datePattern})|$)`,
     "g",
   );
-  const transactions = [];
 
-  for (const match of normalized.matchAll(rowPattern)) {
+  for (const match of normalized.matchAll(doubleDatePattern)) {
     const txnDate = formatIsoDate(match[1]);
     const valueDate = formatIsoDate(match[2]);
     const segment = String(match[3] || "").replace(/\n+/g, " ").replace(/\s+/g, " ").trim();
-
-    if (!segment || /opening balance|closing balance/i.test(segment)) {
-      continue;
-    }
-
     const amounts = [...segment.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((entry) => parseAmount(entry[1]));
-    if (!amounts.length) {
+    const description = segment.replace(/([\d,]+\.\d{2}\s*)+$/g, "").trim();
+
+    if (!segment || !description || /opening balance|closing balance/i.test(segment) || !amounts.length) {
       continue;
     }
 
     const balance = amounts.length >= 2 ? amounts.at(-1) : 0;
     const transactionAmount = amounts.length >= 2 ? amounts.at(-2) : amounts[0];
-    const description = segment.replace(/([\d,]+\.\d{2}\s*)+$/g, "").trim();
-
-    if (!description || !transactionAmount) {
+    if (!transactionAmount) {
       continue;
     }
 
@@ -232,6 +228,35 @@ function extractBankTransactions(bankText = "") {
       descriptionSlug: slug(description),
       amount: transactionAmount,
       balance,
+    });
+  }
+
+  if (transactions.length) {
+    return transactions;
+  }
+
+  const singleDatePattern = new RegExp(
+    `(${datePattern})\\s+([A-Za-z0-9&.,()/' -]+?)\\s+([\\d,]+\\.\\d{2})(?=\\s+${datePattern}|$)`,
+    "g",
+  );
+
+  for (const match of normalized.matchAll(singleDatePattern)) {
+    const paymentDate = formatIsoDate(match[1]);
+    const description = String(match[2] || "").replace(/\s+/g, " ").trim();
+    const transactionAmount = parseAmount(match[3]);
+
+    if (!description || !transactionAmount || /opening balance|closing balance/i.test(description)) {
+      continue;
+    }
+
+    transactions.push({
+      txnDate: paymentDate,
+      valueDate: paymentDate,
+      paymentDate,
+      description,
+      descriptionSlug: slug(description),
+      amount: transactionAmount,
+      balance: 0,
     });
   }
 

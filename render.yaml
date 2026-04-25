@@ -12,24 +12,10 @@ services:
         value: 22
       - key: CLIENT_URL
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: OPENAI_CHAT_MODEL
-        value: gpt-4o-mini
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_CHAT_MODEL
         value: openai/gpt-oss-120b
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: GEMINI_CHAT_MODEL
-        value: gemini-2.0-flash-lite
-      - key: GEMINI_BACKUP_CHAT_MODEL
-        value: gemini-2.0-flash
-      - key: HF_TOKEN
-        sync: false
-      - key: HF_CHAT_MODEL
-        value: zai-org/GLM-4.7:cerebras
       - key: OCR_SPACE_API_KEY
         value: helloworld
       - key: SUPABASE_URL

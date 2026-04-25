@@ -33,8 +33,8 @@ Required `backend/.env` values:
 PORT=4000
 CLIENT_URL=http://localhost:5173
 
-HF_TOKEN=
-HF_CHAT_MODEL=openai/gpt-oss-120b:fastest
+GROQ_API_KEY=
+GROQ_CHAT_MODEL=openai/gpt-oss-120b
 
 OCR_SPACE_API_KEY=helloworld
 
@@ -45,8 +45,6 @@ BREVO_API_KEY=
 BREVO_SENDER_EMAIL=
 BREVO_SENDER_NAME=Invoice Reconciliation AI
 ```
-
-You can also set `OPENAI_API_KEY`, `GROQ_API_KEY`, or `GEMINI_API_KEY` as fallback chat providers.
 
 ## Frontend Setup
 

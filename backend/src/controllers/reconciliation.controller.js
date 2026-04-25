@@ -260,6 +260,47 @@ function extractBankTransactions(bankText = "") {
     });
   }
 
+  if (transactions.length) {
+    return transactions;
+  }
+
+  const lines = normalized
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(transaction details|payment date|description ?\/ ?reference|paid amount)/i.test(line));
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const date = extractLineDate(lines[index]);
+    if (!date || date === "-") {
+      continue;
+    }
+
+    const descriptionLine = lines[index + 1] || "";
+    const amountLine = lines[index + 2] || "";
+    const amountMatch = amountLine.match(/\b([\d,]+\.\d{2})\b/);
+
+    if (!descriptionLine || !amountMatch) {
+      continue;
+    }
+
+    const transactionAmount = parseAmount(amountMatch[1]);
+    if (!transactionAmount || /opening balance|closing balance/i.test(descriptionLine)) {
+      continue;
+    }
+
+    transactions.push({
+      txnDate: date,
+      valueDate: date,
+      paymentDate: date,
+      description: descriptionLine,
+      descriptionSlug: slug(descriptionLine),
+      amount: transactionAmount,
+      balance: 0,
+    });
+    index += 2;
+  }
+
   return transactions;
 }
 

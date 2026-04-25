@@ -283,15 +283,18 @@ function extractAmountFromReferenceContext(invoice, bankText = "") {
   }
 
   const afterHit = snippet.slice(hitIndex + hitText.length);
-  const amounts = [...afterHit.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+  const boundaryMatch = afterHit.match(/\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/);
+  const localSegment = boundaryMatch ? afterHit.slice(0, boundaryMatch.index) : afterHit;
+  const amounts = [...localSegment.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
   if (!amounts.length) {
     return null;
   }
 
   const meaningfulAmounts = amounts.filter(
-    (amount) => amount > 0 && amount <= Math.max(invoice.invoiceAmount * 3, invoice.invoiceAmount + 100000),
+    (amount) => amount > 0 && amount <= Math.max(invoice.invoiceAmount * 10, invoice.invoiceAmount + 500000),
   );
-  const chosen = meaningfulAmounts[0] || amounts[0];
+  const chosenPool = meaningfulAmounts.length ? meaningfulAmounts : amounts;
+  const chosen = Math.min(...chosenPool);
   if (!chosen) {
     return null;
   }
@@ -395,12 +398,13 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
   const invoices = extractInvoiceRecords(invoiceText);
   const transactions = extractBankTransactions(bankText);
 
-  if (!invoices.length || !transactions.length) {
+  if (!invoices.length) {
     return null;
   }
 
   const usedTransactionIndexes = new Set();
   const rows = invoices.map((invoice) => {
+    const localContextMatch = extractAmountFromReferenceContext(invoice, bankText);
     let bestIndex = -1;
     let bestScore = -1;
 
@@ -416,7 +420,41 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
       }
     });
 
-    if (bestIndex < 0 || bestScore < 8) {
+    if (localContextMatch) {
+      const paidAmount = Number(localContextMatch.paidAmount || 0);
+      const difference = paidAmount - invoice.invoiceAmount;
+      let status = "matched";
+      let issue = "";
+
+      if (difference < 0) {
+        status = "underpaid";
+        issue = `Settled short by INR ${Math.abs(difference).toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}.`;
+      } else if (difference > 0) {
+        status = "overpaid";
+        issue = `Settled above invoice by INR ${difference.toLocaleString("en-US", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })}.`;
+      }
+
+      return {
+        invoiceNo: invoice.invoiceNo,
+        companyName: invoice.companyName,
+        invoiceDate: invoice.invoiceDate,
+        paymentDate: localContextMatch.paymentDate || "-",
+        invoiceAmount: invoice.invoiceAmount,
+        paidAmount,
+        difference,
+        status,
+        issue,
+        confidence: "high",
+      };
+    }
+
+    if (!transactions.length || bestIndex < 0 || bestScore < 8) {
       return {
         invoiceNo: invoice.invoiceNo,
         companyName: invoice.companyName,

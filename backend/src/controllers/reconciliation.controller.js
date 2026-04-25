@@ -98,6 +98,25 @@ function extractField(block = "", labels = []) {
   return "";
 }
 
+function extractInvoiceTableTotal(block = "") {
+  const detailSectionMatch = String(block || "").match(
+    /Description[\s\S]*?(?:Payment Instructions|Bank Name|Thank you for your business|Thank you|Terms|Notes|$)/i,
+  );
+  const detailSection = detailSectionMatch?.[0] || "";
+  if (!detailSection) {
+    return 0;
+  }
+
+  const decimalAmounts = [...detailSection.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+  if (decimalAmounts.length < 2) {
+    return 0;
+  }
+
+  const lineTotals = decimalAmounts.filter((_amount, index) => index % 2 === 1);
+  const summed = lineTotals.reduce((sum, amount) => sum + amount, 0);
+  return Number.isFinite(summed) ? summed : 0;
+}
+
 function extractInvoiceRecords(invoiceText = "") {
   const blocks = String(invoiceText || "")
     .split(/(?=Invoice\s*No\s*:)/gi)
@@ -113,10 +132,12 @@ function extractInvoiceRecords(invoiceText = "") {
       const totalMatches = [
         ...normalizedBlock.matchAll(/(?:Grand\s*Total|Invoice\s*Total|Total\s*Amount|Net\s*Amount|Amount\s*Payable|TOTAL)[^\d]{0,20}([\d,]+\.\d{2})/gi),
       ].map((match) => parseAmount(match[1]));
+      const tableDerivedTotal = extractInvoiceTableTotal(normalizedBlock);
       const lineAmounts = [...normalizedBlock.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
       const sortedAmounts = [...lineAmounts].filter(Boolean).sort((left, right) => right - left);
       const invoiceAmount =
         totalMatches.at(-1) ||
+        tableDerivedTotal ||
         sortedAmounts.find((amount) => amount >= 5000) ||
         sortedAmounts[0] ||
         0;

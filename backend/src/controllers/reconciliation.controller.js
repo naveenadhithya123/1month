@@ -306,6 +306,56 @@ function extractAmountFromReferenceContext(invoice, bankText = "") {
   };
 }
 
+function escapeRegExp(value = "") {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function extractDirectReferenceMatch(invoice, bankText = "") {
+  const rawText = String(bankText || "").replace(/\r/g, "\n");
+  if (!rawText.trim()) {
+    return null;
+  }
+
+  const reference = String(invoice?.reference || "").trim();
+  const company = String(invoice?.companyName || "").trim();
+  const lookup = reference || company;
+  if (!lookup) {
+    return null;
+  }
+
+  const normalized = rawText.replace(/\s+/g, " ");
+  const referenceIndex = normalized.toLowerCase().indexOf(lookup.toLowerCase());
+  if (referenceIndex < 0) {
+    return null;
+  }
+
+  const beforeHit = normalized.slice(Math.max(0, referenceIndex - 140), referenceIndex);
+  const afterHit = normalized.slice(referenceIndex);
+  const nextRowMatch = afterHit.slice(lookup.length).match(/\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b\s+\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/);
+  const rowSegment = nextRowMatch
+    ? afterHit.slice(0, lookup.length + nextRowMatch.index)
+    : afterHit.slice(0, 220);
+
+  const dateMatches = [...beforeHit.matchAll(/\b(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{4}-\d{2}-\d{2})\b/g)];
+  const paymentDate = dateMatches.length ? formatIsoDate(dateMatches.at(-1)[1]) : "-";
+
+  const amountMatches = [...rowSegment.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+  if (!amountMatches.length) {
+    return null;
+  }
+
+  const creditedAmount = amountMatches[0];
+  if (!creditedAmount) {
+    return null;
+  }
+
+  return {
+    paidAmount: creditedAmount,
+    paymentDate,
+    snippet: rowSegment,
+  };
+}
+
 function scoreTransactionAgainstInvoice(invoice, transaction) {
   const referenceSlug = slug(invoice.reference);
   const invoiceSlug = slug(invoice.invoiceNo);
@@ -404,6 +454,7 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
 
   const usedTransactionIndexes = new Set();
   const rows = invoices.map((invoice) => {
+    const directReferenceMatch = extractDirectReferenceMatch(invoice, bankText);
     const localContextMatch = extractAmountFromReferenceContext(invoice, bankText);
     let bestIndex = -1;
     let bestScore = -1;
@@ -420,8 +471,10 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
       }
     });
 
-    if (localContextMatch) {
-      const paidAmount = Number(localContextMatch.paidAmount || 0);
+    const authoritativeMatch = directReferenceMatch || localContextMatch;
+
+    if (authoritativeMatch) {
+      const paidAmount = Number(authoritativeMatch.paidAmount || 0);
       const difference = paidAmount - invoice.invoiceAmount;
       let status = "matched";
       let issue = "";
@@ -444,7 +497,7 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
         invoiceNo: invoice.invoiceNo,
         companyName: invoice.companyName,
         invoiceDate: invoice.invoiceDate,
-        paymentDate: localContextMatch.paymentDate || "-",
+        paymentDate: authoritativeMatch.paymentDate || "-",
         invoiceAmount: invoice.invoiceAmount,
         paidAmount,
         difference,

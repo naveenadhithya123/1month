@@ -231,6 +231,62 @@ function extractBankTransactions(bankText = "") {
   return transactions;
 }
 
+function scoreTransactionAgainstInvoice(invoice, transaction) {
+  const referenceSlug = slug(invoice.reference);
+  const invoiceSlug = slug(invoice.invoiceNo);
+  const companyTokens = cleanEntityName(invoice.companyName)
+    .split(" ")
+    .filter((token) => token.length >= 4)
+    .slice(0, 3);
+
+  let score = 0;
+
+  if (referenceSlug && transaction.descriptionSlug.includes(referenceSlug)) {
+    score += 18;
+  }
+  if (invoiceSlug && transaction.descriptionSlug.includes(invoiceSlug)) {
+    score += 12;
+  }
+
+  for (const token of companyTokens) {
+    if (transaction.descriptionSlug.includes(token)) {
+      score += 4;
+    }
+  }
+
+  if (Math.abs(transaction.amount - invoice.invoiceAmount) <= Math.max(1, invoice.invoiceAmount * 0.1)) {
+    score += 2;
+  }
+
+  return score;
+}
+
+function pickBestTransaction(invoice, transactions = []) {
+  let bestMatch = null;
+
+  for (const transaction of transactions) {
+    const score = scoreTransactionAgainstInvoice(invoice, transaction);
+    if (score < 8) {
+      continue;
+    }
+
+    const candidate = {
+      line: transaction.description,
+      score,
+      paidAmount: transaction.amount,
+      paymentDate: transaction.paymentDate,
+      confidence: score >= 18 ? "high" : "medium",
+      balance: transaction.balance,
+    };
+
+    if (!bestMatch || candidate.score > bestMatch.score) {
+      bestMatch = candidate;
+    }
+  }
+
+  return bestMatch;
+}
+
 function findBankMatch(invoice, bankText = "") {
   const transactions = extractBankTransactions(bankText);
   const lines = String(bankText || "")
@@ -246,38 +302,7 @@ function findBankMatch(invoice, bankText = "") {
 
   let bestMatch = null;
 
-  for (const transaction of transactions) {
-    let score = 0;
-
-    if (referenceSlug && transaction.descriptionSlug.includes(referenceSlug)) {
-      score += 18;
-    }
-    if (invoiceSlug && transaction.descriptionSlug.includes(invoiceSlug)) {
-      score += 12;
-    }
-
-    for (const token of companyTokens) {
-      if (transaction.descriptionSlug.includes(token)) {
-        score += 4;
-      }
-    }
-
-    if (score < 8) {
-      continue;
-    }
-
-    const candidate = {
-      line: transaction.description,
-      score: score + (Math.abs(transaction.amount - invoice.invoiceAmount) <= invoice.invoiceAmount * 0.1 ? 2 : 0),
-      paidAmount: transaction.amount,
-      paymentDate: transaction.paymentDate,
-      confidence: score >= 18 ? "high" : "medium",
-    };
-
-    if (!bestMatch || candidate.score > bestMatch.score) {
-      bestMatch = candidate;
-    }
-  }
+  bestMatch = pickBestTransaction(invoice, transactions);
 
   if (bestMatch) {
     return bestMatch;
@@ -342,6 +367,75 @@ function findBankMatch(invoice, bankText = "") {
   }
 
   return bestMatch;
+}
+
+function repairBalanceMisreads(rows = [], parsedInvoices = [], bankText = "") {
+  const transactions = extractBankTransactions(bankText);
+  if (!transactions.length) {
+    return rows;
+  }
+
+  const invoiceMap = new Map(parsedInvoices.map((invoice) => [invoice.key, invoice]));
+
+  return rows.map((row) => {
+    const invoice =
+      invoiceMap.get(slug(row.invoiceNo || `${row.companyName}-${row.invoiceDate}`)) ||
+      parsedInvoices.find((entry) => slug(entry.invoiceNo) === slug(row.invoiceNo));
+
+    if (!invoice) {
+      return row;
+    }
+
+    const transaction = pickBestTransaction(invoice, transactions);
+    if (!transaction) {
+      return row;
+    }
+
+    const currentPaidAmount = Number(row.paidAmount || 0);
+    const currentDifference = Number(row.difference ?? currentPaidAmount - Number(row.invoiceAmount || 0));
+    const looksLikeBalanceMisread =
+      currentPaidAmount > invoice.invoiceAmount * 2 ||
+      (transaction.balance && Math.abs(currentPaidAmount - transaction.balance) < 0.01);
+
+    if (!looksLikeBalanceMisread) {
+      return row;
+    }
+
+    const correctedPaidAmount = transaction.paidAmount;
+    const correctedDifference = correctedPaidAmount - invoice.invoiceAmount;
+    let status = "matched";
+    let issue = "";
+
+    if (correctedDifference < 0) {
+      status = "underpaid";
+      issue = `Settled short by INR ${Math.abs(correctedDifference).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}.`;
+    } else if (correctedDifference > 0) {
+      status = "overpaid";
+      issue = `Settled above invoice by INR ${correctedDifference.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}.`;
+    }
+
+    if (currentPaidAmount === 0 && currentDifference < 0) {
+      return row;
+    }
+
+    return {
+      ...row,
+      companyName: invoice.companyName,
+      invoiceDate: invoice.invoiceDate,
+      paymentDate: transaction.paymentDate || row.paymentDate || "-",
+      paidAmount: correctedPaidAmount,
+      difference: correctedDifference,
+      status,
+      issue,
+      confidence: transaction.confidence || row.confidence || "high",
+    };
+  });
 }
 
 function buildHeuristicRow(invoice, bankMatch) {
@@ -437,7 +531,7 @@ function enrichReconciliationResult(aiResult, invoiceText, bankText) {
     byKey.set(invoice.key, heuristicRow);
   }
 
-  const rows = [...byKey.values()];
+  const rows = repairBalanceMisreads([...byKey.values()], parsedInvoices, bankText);
   const matches = rows.filter((row) => row.status === "matched");
   const mismatches = rows.filter((row) => ["underpaid", "overpaid", "unpaid"].includes(row.status));
   const reviewItems = rows.filter((row) => !["matched", "underpaid", "overpaid", "unpaid"].includes(row.status));

@@ -4,6 +4,7 @@ Rules:
 - Explain clearly in a polished, easy-to-read format.
 - Start with a direct answer in 1 or 2 lines.
 - Then use short section headings and bullet points where useful.
+- Use plain text structure only. Do not use markdown markers like **, __, #, ##, ###, or fenced code blocks unless the user explicitly asks for code.
 - Use 1 to 3 relevant emojis when they improve readability.
 - Keep emoji use tasteful and light, never in every line.
 - Prefer simple formatting over raw markdown tables.

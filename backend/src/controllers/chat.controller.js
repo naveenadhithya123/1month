@@ -420,6 +420,23 @@ function buildDocumentAwarePrompt(message = "", mode = "study") {
 The file is already uploaded in this chat. Use the uploaded document directly and answer from it. Do not ask the user to re-upload the PDF, paste the questions, or repeat the document text unless the document context is actually empty.`;
 }
 
+function normalizeChatAnswer(answer = "") {
+  return String(answer || "")
+    .replace(/\r/g, "\n")
+    .replace(/```[\s\S]*?```/g, (block) =>
+      block
+        .replace(/```[a-z]*\n?/gi, "")
+        .replace(/```/g, "")
+        .trim(),
+    )
+    .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1")
+    .replace(/^\s*[-*]\s+/gm, "- ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 export async function sendMessage(req, res) {
   let activeChatId = req.body.chatId ?? uuid();
   let fallbackUserId = "";
@@ -716,6 +733,8 @@ If the user asks for one word or one short sentence only, output exactly that co
       });
     }
 
+    answer = normalizeChatAnswer(answer);
+
     if (userId) {
       await saveMessage({
         chat_id: activeChatId,
@@ -764,6 +783,7 @@ If the user asks for one word or one short sentence only, output exactly that co
       }
 
       fallbackAnswer ||= buildLocalFallbackAnswer(fallbackRequestMessage, fallbackMode, fallbackUserEmail);
+      fallbackAnswer = normalizeChatAnswer(fallbackAnswer);
 
       if (fallbackUserId) {
         await saveMessage({

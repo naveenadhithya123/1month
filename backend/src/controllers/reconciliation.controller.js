@@ -9,6 +9,279 @@ import {
   normalizeReconciliationResult,
 } from "../utils/reconciliationReport.js";
 
+function cleanEntityName(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\b(private|pvt|ltd|limited|inc|corp|corporation|llc|agency|solutions|solution|technologies|technology)\b/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function slug(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
+function parseAmount(value = "") {
+  const numeric = Number(String(value || "").replace(/,/g, ""));
+  return Number.isFinite(numeric) ? numeric : 0;
+}
+
+function formatIsoDate(raw = "") {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return "-";
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return text;
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) {
+    return text;
+  }
+
+  return parsed.toISOString().slice(0, 10);
+}
+
+function extractInvoiceRecords(invoiceText = "") {
+  const blocks = String(invoiceText || "")
+    .split(/(?=Invoice\s*No\s*:)/gi)
+    .filter((block) => /Invoice\s*No\s*:/i.test(block));
+
+  return blocks
+    .map((block, index) => {
+      const invoiceNo = block.match(/Invoice\s*No\s*:\s*([A-Z0-9/-]+)/i)?.[1]?.trim() || "";
+      const companyName =
+        block.match(/Bill\s*To\s*:\s*([^\n|]+)/i)?.[1]?.trim() ||
+        block.match(/Customer\s*Name\s*:\s*([^\n|]+)/i)?.[1]?.trim() ||
+        "";
+      const reference = block.match(/Reference\s*:\s*([A-Z0-9/-]+)/i)?.[1]?.trim() || "";
+      const invoiceDate = block.match(/Invoice\s*Date\s*:\s*([^\n|]+)/i)?.[1]?.trim() || "-";
+      const totals = [...block.matchAll(/(?:TOTAL|Grand Total)[^\d]*([\d,]+\.\d{2})/gi)].map((match) => parseAmount(match[1]));
+      const fallbackAmounts = [...block.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+      const invoiceAmount = totals.at(-1) || fallbackAmounts.at(-1) || 0;
+
+      if (!invoiceNo || !companyName || !invoiceAmount) {
+        return null;
+      }
+
+      return {
+        invoiceNo,
+        companyName,
+        reference,
+        invoiceDate: formatIsoDate(invoiceDate),
+        invoiceAmount,
+        key: slug(invoiceNo || `${companyName}-${index}`),
+      };
+    })
+    .filter(Boolean);
+}
+
+function extractTransactionAmount(line = "") {
+  const matches = [...String(line || "").matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+  if (!matches.length) {
+    return 0;
+  }
+
+  if (matches.length === 1) {
+    return matches[0];
+  }
+
+  return matches[0];
+}
+
+function extractLineDate(line = "") {
+  const match = String(line || "").match(/(\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|\d{4}-\d{2}-\d{2})/);
+  return formatIsoDate(match?.[1] || "-");
+}
+
+function findBankMatch(invoice, bankText = "") {
+  const lines = String(bankText || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const referenceSlug = slug(invoice.reference);
+  const invoiceSlug = slug(invoice.invoiceNo);
+  const companyTokens = cleanEntityName(invoice.companyName)
+    .split(" ")
+    .filter((token) => token.length >= 4)
+    .slice(0, 3);
+
+  let bestMatch = null;
+
+  for (const line of lines) {
+    const lineSlug = slug(line);
+    let score = 0;
+
+    if (referenceSlug && lineSlug.includes(referenceSlug)) {
+      score += 14;
+    }
+    if (invoiceSlug && lineSlug.includes(invoiceSlug)) {
+      score += 10;
+    }
+
+    for (const token of companyTokens) {
+      if (lineSlug.includes(token)) {
+        score += 4;
+      }
+    }
+
+    if (score < 8) {
+      continue;
+    }
+
+    const amount = extractTransactionAmount(line);
+    if (!amount) {
+      continue;
+    }
+
+    const candidate = {
+      line,
+      score,
+      paidAmount: amount,
+      paymentDate: extractLineDate(line),
+      confidence: score >= 14 ? "high" : "medium",
+    };
+
+    if (!bestMatch || candidate.score > bestMatch.score) {
+      bestMatch = candidate;
+    }
+  }
+
+  return bestMatch;
+}
+
+function buildHeuristicRow(invoice, bankMatch) {
+  const paidAmount = bankMatch?.paidAmount || 0;
+  const difference = paidAmount - invoice.invoiceAmount;
+  let status = "matched";
+  let issue = "";
+
+  if (!bankMatch) {
+    status = "unpaid";
+    issue = "No matching transaction found in the bank statement.";
+  } else if (difference < 0) {
+    status = "underpaid";
+    issue = `Settled short by INR ${Math.abs(difference).toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}.`;
+  } else if (difference > 0) {
+    status = "overpaid";
+    issue = `Settled above invoice by INR ${difference.toLocaleString("en-US", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    })}.`;
+  }
+
+  return {
+    invoiceNo: invoice.invoiceNo,
+    companyName: invoice.companyName,
+    invoiceDate: invoice.invoiceDate,
+    paymentDate: bankMatch?.paymentDate || "-",
+    invoiceAmount: invoice.invoiceAmount,
+    paidAmount,
+    difference,
+    status,
+    issue,
+    confidence: bankMatch?.confidence || "high",
+  };
+}
+
+function summarizeResult(result) {
+  const parts = [];
+  if (result.matchedCount) {
+    parts.push(`${result.matchedCount} fully matched`);
+  }
+
+  const underpaid = result.mismatches.filter((item) => item.status === "underpaid").length;
+  const overpaid = result.mismatches.filter((item) => item.status === "overpaid").length;
+  const unpaid = result.mismatches.filter((item) => item.status === "unpaid").length;
+
+  if (underpaid) {
+    parts.push(`${underpaid} underpaid`);
+  }
+  if (overpaid) {
+    parts.push(`${overpaid} overpaid`);
+  }
+  if (unpaid) {
+    parts.push(`${unpaid} unpaid`);
+  }
+  if (result.reviewCount) {
+    parts.push(`${result.reviewCount} needs review`);
+  }
+
+  const summaryCore = parts.length ? parts.join(", ") : "No invoices were classified";
+  return `${summaryCore}; total invoice amount INR ${result.totalInvoiceAmount.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}, total paid INR ${result.totalPaidAmount.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}.`;
+}
+
+function enrichReconciliationResult(aiResult, invoiceText, bankText) {
+  const normalized = normalizeReconciliationResult(aiResult);
+  const parsedInvoices = extractInvoiceRecords(invoiceText);
+
+  if (!parsedInvoices.length) {
+    return normalized;
+  }
+
+  const existingRows = [
+    ...normalized.matches,
+    ...normalized.mismatches,
+    ...normalized.reviewItems,
+  ];
+  const byKey = new Map(
+    existingRows.map((row) => [slug(row.invoiceNo || `${row.companyName}-${row.invoiceDate}`), row]),
+  );
+
+  for (const invoice of parsedInvoices) {
+    const bankMatch = findBankMatch(invoice, bankText);
+    const heuristicRow = buildHeuristicRow(invoice, bankMatch);
+    byKey.set(invoice.key, heuristicRow);
+  }
+
+  const rows = [...byKey.values()];
+  const matches = rows.filter((row) => row.status === "matched");
+  const mismatches = rows.filter((row) => ["underpaid", "overpaid", "unpaid"].includes(row.status));
+  const reviewItems = rows.filter((row) => !["matched", "underpaid", "overpaid", "unpaid"].includes(row.status));
+  const totalInvoiceAmount = rows.reduce((sum, row) => sum + Number(row.invoiceAmount || 0), 0);
+  const totalPaidAmount = rows.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
+
+  const nextSteps = mismatches.map((row) => {
+    if (row.status === "underpaid") {
+      return `Investigate the short payment for ${row.companyName} (${row.invoiceNo}).`;
+    }
+    if (row.status === "overpaid") {
+      return `Confirm the excess settlement for ${row.companyName} (${row.invoiceNo}).`;
+    }
+    return `Follow up with ${row.companyName} regarding unpaid invoice ${row.invoiceNo}.`;
+  });
+
+  const result = {
+    summary: "",
+    matchedCount: matches.length,
+    mismatchCount: mismatches.length,
+    reviewCount: reviewItems.length,
+    totalInvoiceAmount,
+    totalPaidAmount,
+    matches,
+    mismatches,
+    reviewItems,
+    nextSteps: nextSteps.length ? nextSteps : normalized.nextSteps,
+  };
+
+  result.summary = summarizeResult(result);
+  return result;
+}
+
 function getUploadedFile(req, fieldName) {
   return Array.isArray(req.files?.[fieldName]) ? req.files[fieldName][0] : null;
 }
@@ -99,7 +372,7 @@ ${bankText.slice(0, 45000)}`,
     ],
   });
 
-  return normalizeReconciliationResult(extractJson(raw));
+  return enrichReconciliationResult(extractJson(raw), invoiceText, bankText);
 }
 
 export async function analyzeReconciliation(req, res) {

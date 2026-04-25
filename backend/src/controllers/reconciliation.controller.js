@@ -359,6 +359,116 @@ function pickBestTransaction(invoice, transactions = []) {
   return bestMatch;
 }
 
+function buildResultFromRows(rows = []) {
+  const matches = rows.filter((row) => row.status === "matched");
+  const mismatches = rows.filter((row) => ["underpaid", "overpaid", "unpaid"].includes(row.status));
+  const reviewItems = rows.filter((row) => !["matched", "underpaid", "overpaid", "unpaid"].includes(row.status));
+  const totalInvoiceAmount = rows.reduce((sum, row) => sum + Number(row.invoiceAmount || 0), 0);
+  const totalPaidAmount = rows.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
+
+  const result = {
+    summary: "",
+    matchedCount: matches.length,
+    mismatchCount: mismatches.length,
+    reviewCount: reviewItems.length,
+    totalInvoiceAmount,
+    totalPaidAmount,
+    matches,
+    mismatches,
+    reviewItems,
+    nextSteps: mismatches.map((row) => {
+      if (row.status === "underpaid") {
+        return `Investigate the short payment for ${row.companyName} (${row.invoiceNo}).`;
+      }
+      if (row.status === "overpaid") {
+        return `Confirm the excess settlement for ${row.companyName} (${row.invoiceNo}).`;
+      }
+      return `Follow up with ${row.companyName} regarding unpaid invoice ${row.invoiceNo}.`;
+    }),
+  };
+
+  result.summary = summarizeResult(result);
+  return result;
+}
+
+function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
+  const invoices = extractInvoiceRecords(invoiceText);
+  const transactions = extractBankTransactions(bankText);
+
+  if (!invoices.length || !transactions.length) {
+    return null;
+  }
+
+  const usedTransactionIndexes = new Set();
+  const rows = invoices.map((invoice) => {
+    let bestIndex = -1;
+    let bestScore = -1;
+
+    transactions.forEach((transaction, index) => {
+      if (usedTransactionIndexes.has(index)) {
+        return;
+      }
+
+      const score = scoreTransactionAgainstInvoice(invoice, transaction);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = index;
+      }
+    });
+
+    if (bestIndex < 0 || bestScore < 8) {
+      return {
+        invoiceNo: invoice.invoiceNo,
+        companyName: invoice.companyName,
+        invoiceDate: invoice.invoiceDate,
+        paymentDate: "-",
+        invoiceAmount: invoice.invoiceAmount,
+        paidAmount: 0,
+        difference: -invoice.invoiceAmount,
+        status: "unpaid",
+        issue: "No matching transaction found in the bank statement.",
+        confidence: "high",
+      };
+    }
+
+    usedTransactionIndexes.add(bestIndex);
+    const transaction = transactions[bestIndex];
+    const paidAmount = Number(transaction.amount || 0);
+    const difference = paidAmount - invoice.invoiceAmount;
+    let status = "matched";
+    let issue = "";
+
+    if (difference < 0) {
+      status = "underpaid";
+      issue = `Settled short by INR ${Math.abs(difference).toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}.`;
+    } else if (difference > 0) {
+      status = "overpaid";
+      issue = `Settled above invoice by INR ${difference.toLocaleString("en-US", {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}.`;
+    }
+
+    return {
+      invoiceNo: invoice.invoiceNo,
+      companyName: invoice.companyName,
+      invoiceDate: invoice.invoiceDate,
+      paymentDate: transaction.paymentDate || "-",
+      invoiceAmount: invoice.invoiceAmount,
+      paidAmount,
+      difference,
+      status,
+      issue,
+      confidence: bestScore >= 18 ? "high" : "medium",
+    };
+  });
+
+  return buildResultFromRows(rows);
+}
+
 function findBankMatch(invoice, bankText = "") {
   const transactions = extractBankTransactions(bankText);
   const lines = String(bankText || "")
@@ -596,6 +706,11 @@ function summarizeResult(result) {
 }
 
 function enrichReconciliationResult(aiResult, invoiceText, bankText) {
+  const deterministic = buildDeterministicReconciliation(invoiceText, bankText);
+  if (deterministic) {
+    return deterministic;
+  }
+
   const normalized = normalizeReconciliationResult(aiResult);
   const parsedInvoices = extractInvoiceRecords(invoiceText);
 
@@ -619,37 +734,11 @@ function enrichReconciliationResult(aiResult, invoiceText, bankText) {
   }
 
   const rows = repairBalanceMisreads([...byKey.values()], parsedInvoices, bankText);
-  const matches = rows.filter((row) => row.status === "matched");
-  const mismatches = rows.filter((row) => ["underpaid", "overpaid", "unpaid"].includes(row.status));
-  const reviewItems = rows.filter((row) => !["matched", "underpaid", "overpaid", "unpaid"].includes(row.status));
-  const totalInvoiceAmount = rows.reduce((sum, row) => sum + Number(row.invoiceAmount || 0), 0);
-  const totalPaidAmount = rows.reduce((sum, row) => sum + Number(row.paidAmount || 0), 0);
-
-  const nextSteps = mismatches.map((row) => {
-    if (row.status === "underpaid") {
-      return `Investigate the short payment for ${row.companyName} (${row.invoiceNo}).`;
-    }
-    if (row.status === "overpaid") {
-      return `Confirm the excess settlement for ${row.companyName} (${row.invoiceNo}).`;
-    }
-    return `Follow up with ${row.companyName} regarding unpaid invoice ${row.invoiceNo}.`;
-  });
-
-  const result = {
-    summary: "",
-    matchedCount: matches.length,
-    mismatchCount: mismatches.length,
-    reviewCount: reviewItems.length,
-    totalInvoiceAmount,
-    totalPaidAmount,
-    matches,
-    mismatches,
-    reviewItems,
-    nextSteps: nextSteps.length ? nextSteps : normalized.nextSteps,
+  const result = buildResultFromRows(rows);
+  return {
+    ...result,
+    nextSteps: result.nextSteps.length ? result.nextSteps : normalized.nextSteps,
   };
-
-  result.summary = summarizeResult(result);
-  return result;
 }
 
 function getUploadedFile(req, fieldName) {
@@ -687,6 +776,11 @@ function extractJson(raw = "") {
 }
 
 async function analyzeTexts({ invoiceText, bankText }) {
+  const deterministic = buildDeterministicReconciliation(invoiceText, bankText);
+  if (deterministic) {
+    return deterministic;
+  }
+
   const raw = await chatCompletion({
     temperature: 0,
     maxTokens: 2200,

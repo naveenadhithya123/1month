@@ -1,6 +1,7 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   analyzeReconciliation,
+  sendChatMessage,
   sendReconciliationEmail,
 } from "./services/api.js";
 
@@ -26,6 +27,32 @@ function formatMoney(value) {
 
 function getIssueRows(result) {
   return [...(result?.mismatches || []), ...(result?.reviewItems || [])];
+}
+
+function buildAnalysisContext(result) {
+  if (!result) {
+    return "";
+  }
+
+  const issueRows = getIssueRows(result);
+  const summaryLines = [
+    `Summary: ${result.summary || ""}`,
+    `Matched count: ${result.matchedCount ?? 0}`,
+    `Mismatch count: ${result.mismatchCount ?? 0}`,
+    `Review count: ${result.reviewCount ?? 0}`,
+    `Invoice total: ${result.totalInvoiceAmount ?? 0}`,
+    `Paid total: ${result.totalPaidAmount ?? 0}`,
+  ];
+
+  if (!issueRows.length) {
+    return summaryLines.join("\n");
+  }
+
+  const issueLines = issueRows.map((row, index) =>
+    `${index + 1}. Invoice ${row.invoiceNo}, company ${row.companyName}, status ${row.status}, invoice amount ${row.invoiceAmount}, paid amount ${row.paidAmount}, difference ${row.difference}, invoice date ${row.invoiceDate}, payment date ${row.paymentDate}, issue ${row.issue || "none"}`,
+  );
+
+  return `${summaryLines.join("\n")}\nOpen issues:\n${issueLines.join("\n")}`;
 }
 
 function FileDrop({ label, description, file, onChange, inputRef }) {
@@ -54,12 +81,22 @@ export default function App() {
   const [runId, setRunId] = useState("");
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isChatLoading, setIsChatLoading] = useState(false);
   const invoiceRef = useRef(null);
   const bankRef = useRef(null);
+  const chatFeedRef = useRef(null);
 
   const issueRows = useMemo(() => getIssueRows(analysis), [analysis]);
   const canAnalyze = invoicePdf && bankPdf && !isAnalyzing;
   const canSend = analysis && email.trim() && !isSending;
+
+  useEffect(() => {
+    if (!chatFeedRef.current) {
+      return;
+    }
+
+    chatFeedRef.current.scrollTop = chatFeedRef.current.scrollHeight;
+  }, [messages, isChatLoading]);
 
   function addMessage(role, text) {
     setMessages((previous) => [...previous, { role, text }]);
@@ -135,12 +172,38 @@ export default function App() {
     }
 
     addMessage("user", text);
-    addMessage(
-      "assistant",
-      analysis
-        ? "The latest reconciliation is ready above. Ask me to send it to an email address, or upload a new pair of PDFs and analyze again."
-        : "Upload the two PDFs and press Analyze. After that, I can email the report as a PDF.",
-    );
+    setIsChatLoading(true);
+
+    const history = messages.map((message) => ({
+      role: message.role,
+      content: message.text,
+    }));
+    const analysisContext = buildAnalysisContext(analysis);
+    const prompt = analysisContext
+      ? `${text}\n\nUse this invoice reconciliation context when answering:\n${analysisContext}`
+      : text;
+
+    sendChatMessage({
+      message: prompt,
+      history,
+      mode: analysis ? "documents" : "study",
+    })
+      .then((response) => {
+        addMessage(
+          "assistant",
+          response.answer ||
+            "I could not prepare a reply right now. Please try again.",
+        );
+      })
+      .catch((error) => {
+        addMessage(
+          "assistant",
+          error.message || "The chat service could not answer right now.",
+        );
+      })
+      .finally(() => {
+        setIsChatLoading(false);
+      });
   }
 
   return (
@@ -282,12 +345,17 @@ export default function App() {
       </section>
 
       <section className="chat-panel">
-        <div className="chat-feed">
+        <div className="chat-feed" ref={chatFeedRef}>
           {messages.map((message, index) => (
             <div className={`chat-bubble ${message.role}`} key={`${message.role}-${index}`}>
               {message.text}
             </div>
           ))}
+          {isChatLoading ? (
+            <div className="chat-bubble assistant">
+              Thinking...
+            </div>
+          ) : null}
         </div>
         <form className="chat-composer" onSubmit={handleChatSubmit}>
           <input
@@ -295,7 +363,7 @@ export default function App() {
             onChange={(event) => setChatValue(event.target.value)}
             placeholder="Type: send this report to accounts@example.com"
           />
-          <button type="submit">Send</button>
+          <button type="submit" disabled={isChatLoading || isSending || isAnalyzing}>Send</button>
         </form>
       </section>
     </main>

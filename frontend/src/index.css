@@ -20,6 +20,7 @@
 html,
 body,
 #root {
+  height: 100%;
   min-height: 100%;
   margin: 0;
 }
@@ -41,13 +42,16 @@ button {
 
 .app-shell {
   height: 100dvh;
+  min-height: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 370px;
   gap: 0;
+  overflow: hidden;
 }
 
 .workspace {
   min-width: 0;
+  min-height: 0;
   display: grid;
   grid-template-columns: 340px minmax(0, 1fr);
   border-right: 1px solid var(--line);
@@ -208,6 +212,7 @@ button {
 
 .analysis-panel {
   min-width: 0;
+  min-height: 0;
   padding: 28px;
   overflow-y: auto;
 }
@@ -359,17 +364,40 @@ button {
 
 .chat-panel {
   min-width: 0;
+  min-height: 0;
   background: #ffffff;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .chat-feed {
+  min-height: 0;
   padding: 22px;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 12px;
+  scroll-behavior: smooth;
+}
+
+.chat-feed::-webkit-scrollbar,
+.control-panel::-webkit-scrollbar,
+.analysis-panel::-webkit-scrollbar {
+  width: 10px;
+}
+
+.chat-feed::-webkit-scrollbar-thumb,
+.control-panel::-webkit-scrollbar-thumb,
+.analysis-panel::-webkit-scrollbar-thumb {
+  background: #c4cfda;
+  border-radius: 999px;
+}
+
+.chat-feed::-webkit-scrollbar-track,
+.control-panel::-webkit-scrollbar-track,
+.analysis-panel::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 .chat-bubble {

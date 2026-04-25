@@ -110,9 +110,16 @@ function extractInvoiceRecords(invoiceText = "") {
       const companyName = extractField(normalizedBlock, ["Bill To", "Customer Name"]);
       const reference = extractField(normalizedBlock, ["Reference"]).match(/[A-Z0-9/-]+/i)?.[0]?.trim() || "";
       const invoiceDate = extractField(normalizedBlock, ["Invoice Date"]) || "-";
-      const totals = [...normalizedBlock.matchAll(/(?:TOTAL|Grand Total)[^\d]*([\d,]+\.\d{2})/gi)].map((match) => parseAmount(match[1]));
-      const fallbackAmounts = [...normalizedBlock.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
-      const invoiceAmount = totals.at(-1) || fallbackAmounts.at(-1) || 0;
+      const totalMatches = [
+        ...normalizedBlock.matchAll(/(?:Grand\s*Total|Invoice\s*Total|Total\s*Amount|Net\s*Amount|Amount\s*Payable|TOTAL)[^\d]{0,20}([\d,]+\.\d{2})/gi),
+      ].map((match) => parseAmount(match[1]));
+      const lineAmounts = [...normalizedBlock.matchAll(/\b([\d,]+\.\d{2})\b/g)].map((match) => parseAmount(match[1]));
+      const sortedAmounts = [...lineAmounts].filter(Boolean).sort((left, right) => right - left);
+      const invoiceAmount =
+        totalMatches.at(-1) ||
+        sortedAmounts.find((amount) => amount >= 5000) ||
+        sortedAmounts[0] ||
+        0;
 
       if (!invoiceNo || !companyName || !invoiceAmount) {
         return null;
@@ -448,14 +455,12 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
   const invoices = extractInvoiceRecords(invoiceText);
   const transactions = extractBankTransactions(bankText);
 
-  if (!invoices.length) {
+  if (!invoices.length || !transactions.length) {
     return null;
   }
 
   const usedTransactionIndexes = new Set();
   const rows = invoices.map((invoice) => {
-    const directReferenceMatch = extractDirectReferenceMatch(invoice, bankText);
-    const localContextMatch = extractAmountFromReferenceContext(invoice, bankText);
     let bestIndex = -1;
     let bestScore = -1;
 
@@ -471,43 +476,7 @@ function buildDeterministicReconciliation(invoiceText = "", bankText = "") {
       }
     });
 
-    const authoritativeMatch = directReferenceMatch || localContextMatch;
-
-    if (authoritativeMatch) {
-      const paidAmount = Number(authoritativeMatch.paidAmount || 0);
-      const difference = paidAmount - invoice.invoiceAmount;
-      let status = "matched";
-      let issue = "";
-
-      if (difference < 0) {
-        status = "underpaid";
-        issue = `Settled short by INR ${Math.abs(difference).toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}.`;
-      } else if (difference > 0) {
-        status = "overpaid";
-        issue = `Settled above invoice by INR ${difference.toLocaleString("en-US", {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })}.`;
-      }
-
-      return {
-        invoiceNo: invoice.invoiceNo,
-        companyName: invoice.companyName,
-        invoiceDate: invoice.invoiceDate,
-        paymentDate: authoritativeMatch.paymentDate || "-",
-        invoiceAmount: invoice.invoiceAmount,
-        paidAmount,
-        difference,
-        status,
-        issue,
-        confidence: "high",
-      };
-    }
-
-    if (!transactions.length || bestIndex < 0 || bestScore < 8) {
+    if (bestIndex < 0 || bestScore < 8) {
       return {
         invoiceNo: invoice.invoiceNo,
         companyName: invoice.companyName,

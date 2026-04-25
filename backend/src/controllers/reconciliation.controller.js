@@ -892,23 +892,107 @@ function getUploadedFile(req, fieldName) {
   return Array.isArray(req.files?.[fieldName]) ? req.files[fieldName][0] : null;
 }
 
-async function extractUploadedPdf(file) {
+function countMatches(text = "", pattern) {
+  return [...String(text || "").matchAll(pattern)].length;
+}
+
+function scoreInvoiceExtraction(text = "") {
+  const value = String(text || "");
+  if (!value.trim()) {
+    return 0;
+  }
+
+  return (
+    countMatches(value, /Invoice\s*No\s*:/gi) * 5 +
+    countMatches(value, /Bill\s*To\s*:/gi) * 4 +
+    countMatches(value, /Reference\s*:/gi) * 4 +
+    countMatches(value, /Invoice\s*Date\s*:/gi) * 3 +
+    countMatches(value, /Description/gi) * 2 +
+    countMatches(value, /\bTOTAL\b/gi) * 6 +
+    countMatches(value, /\b[\d,]+\.\d{2}\b/g)
+  );
+}
+
+function scoreBankExtraction(text = "") {
+  const value = String(text || "");
+  if (!value.trim()) {
+    return 0;
+  }
+
+  return (
+    countMatches(value, /Account\s*Statement/gi) * 3 +
+    countMatches(value, /Transaction\s*Details/gi) * 4 +
+    countMatches(value, /Payment\s*Date/gi) * 5 +
+    countMatches(value, /Description\s*\/\s*Reference/gi) * 5 +
+    countMatches(value, /Paid\s*Amount/gi) * 6 +
+    countMatches(value, /\bREF-[A-Z0-9-]+\b/gi) * 4 +
+    countMatches(value, /\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/g) * 2 +
+    countMatches(value, /\b[\d,]+\.\d{2}\b/g)
+  );
+}
+
+function chooseExtractedText(kind = "generic", pdfText = "", ocrText = "") {
+  const normalizedPdfText = String(pdfText || "").trim();
+  const normalizedOcrText = String(ocrText || "").trim();
+
+  if (!normalizedPdfText) {
+    return normalizedOcrText;
+  }
+
+  if (!normalizedOcrText) {
+    return normalizedPdfText;
+  }
+
+  const scorer = kind === "bank" ? scoreBankExtraction : scoreInvoiceExtraction;
+  const pdfScore = scorer(normalizedPdfText);
+  const ocrScore = scorer(normalizedOcrText);
+
+  if (ocrScore >= pdfScore + 4) {
+    return normalizedOcrText;
+  }
+
+  if (pdfScore >= ocrScore + 4) {
+    return normalizedPdfText;
+  }
+
+  const structuredPdfText = kind === "bank"
+    ? /Payment\s*Date[\s\S]*Paid\s*Amount/i.test(normalizedPdfText)
+    : /Invoice\s*No\s*:[\s\S]*\bTOTAL\b/i.test(normalizedPdfText);
+  const structuredOcrText = kind === "bank"
+    ? /Payment\s*Date[\s\S]*Paid\s*Amount/i.test(normalizedOcrText)
+    : /Invoice\s*No\s*:[\s\S]*\bTOTAL\b/i.test(normalizedOcrText);
+
+  if (structuredOcrText && !structuredPdfText) {
+    return normalizedOcrText;
+  }
+
+  if (structuredPdfText && !structuredOcrText) {
+    return normalizedPdfText;
+  }
+
+  return normalizedOcrText.length >= normalizedPdfText.length ? normalizedOcrText : normalizedPdfText;
+}
+
+async function extractUploadedPdf(file, kind = "generic") {
   if (!file) {
     return "";
   }
 
-  let text = "";
+  let pdfText = "";
+  let ocrText = "";
   try {
-    text = await extractPdfText(file.buffer);
+    pdfText = await extractPdfText(file.buffer);
   } catch (_error) {
-    text = "";
+    pdfText = "";
   }
 
-  if (!text?.trim()) {
-    text = await extractTextFromBuffer(file.buffer, file.originalname, file.mimetype);
+  try {
+    ocrText = await extractTextFromBuffer(file.buffer, file.originalname, file.mimetype);
+  } catch (_error) {
+    ocrText = "";
   }
 
-  return String(text || "").trim();
+  return chooseExtractedText(kind, pdfText, ocrText);
 }
 
 function extractJson(raw = "") {
@@ -1033,8 +1117,8 @@ export async function analyzeReconciliation(req, res) {
     }
 
     const [invoiceText, bankText] = await Promise.all([
-      extractUploadedPdf(invoiceFile),
-      extractUploadedPdf(bankFile),
+      extractUploadedPdf(invoiceFile, "invoice"),
+      extractUploadedPdf(bankFile, "bank"),
     ]);
 
     if (!invoiceText || !bankText) {

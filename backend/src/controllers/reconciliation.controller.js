@@ -204,6 +204,100 @@ function extractDateFromWindow(lines = [], anchorIndex = 0) {
   return "-";
 }
 
+function extractSimplifiedPaidAmountTransactions(bankText = "") {
+  const normalized = String(bankText || "").replace(/\r/g, "\n");
+  const sectionMatch = normalized.match(
+    /Transaction\s*Details[\s\S]*?(?:This is a system-generated statement|For queries|State Bank of India\s*\|\s*Corporate Centre|$)/i,
+  );
+  const section = String(sectionMatch?.[0] || "").trim();
+  if (!section) {
+    return [];
+  }
+
+  const datePattern = /\b\d{1,2}\s+[A-Za-z]{3}\s+\d{4}\b/g;
+  const amountPattern = /\b[\d,]+\.\d{2}\b/g;
+  const rowPattern = /(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s+(.+?)\s+([\d,]+\.\d{2})(?=\s+\d{1,2}\s+[A-Za-z]{3}\s+\d{4}|$)/g;
+  const directRows = [];
+
+  for (const match of section.matchAll(rowPattern)) {
+    const paymentDate = formatIsoDate(match[1]);
+    const description = String(match[2] || "").replace(/\s+/g, " ").trim();
+    const amount = parseAmount(match[3]);
+
+    if (!paymentDate || paymentDate === "-" || !description || !amount) {
+      continue;
+    }
+
+    if (/payment date|description ?\/ ?reference|paid amount|transaction details/i.test(description)) {
+      continue;
+    }
+
+    directRows.push({
+      txnDate: paymentDate,
+      valueDate: paymentDate,
+      paymentDate,
+      description,
+      descriptionSlug: slug(description),
+      amount,
+      balance: 0,
+    });
+  }
+
+  if (directRows.length >= 3) {
+    return directRows;
+  }
+
+  const lines = section
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => !/^(transaction details|payment date|description ?\/ ?reference|paid amount.*|this is a system-generated statement|for queries|state bank of india\s*\|\s*corporate centre)/i.test(line));
+
+  const dateLines = lines.filter((line) => {
+    const matches = line.match(datePattern) || [];
+    return matches.length === 1 && line.replace(datePattern, "").trim() === "";
+  });
+  const amountLines = lines.filter((line) => {
+    const matches = line.match(amountPattern) || [];
+    return matches.length === 1 && line.replace(amountPattern, "").trim() === "";
+  });
+  const descriptionLines = lines.filter((line) => {
+    if ((line.match(datePattern) || []).length) {
+      return false;
+    }
+    if ((line.match(amountPattern) || []).length && line.replace(amountPattern, "").trim() === "") {
+      return false;
+    }
+    return /[A-Za-z]/.test(line) && !/^(account holder|account no|period|branch|ifsc|currency)\b/i.test(line);
+  });
+
+  if (
+    dateLines.length >= 2 &&
+    amountLines.length >= 2 &&
+    descriptionLines.length >= 2 &&
+    dateLines.length === amountLines.length &&
+    dateLines.length === descriptionLines.length
+  ) {
+    return dateLines.map((dateLine, index) => {
+      const paymentDate = formatIsoDate(dateLine);
+      const description = descriptionLines[index].replace(/\s+/g, " ").trim();
+      const amount = parseAmount(amountLines[index]);
+
+      return {
+        txnDate: paymentDate,
+        valueDate: paymentDate,
+        paymentDate,
+        description,
+        descriptionSlug: slug(description),
+        amount,
+        balance: 0,
+      };
+    }).filter((entry) => entry.paymentDate !== "-" && entry.description && entry.amount);
+  }
+
+  return [];
+}
+
 function extractBankTransactions(bankText = "") {
   const normalized = String(bankText || "")
     .replace(/\r/g, "\n")
@@ -218,6 +312,11 @@ function extractBankTransactions(bankText = "") {
 
   const datePattern = "\\d{1,2}\\s+[A-Za-z]{3}\\s+\\d{4}";
   const transactions = [];
+  const simplifiedTransactions = extractSimplifiedPaidAmountTransactions(normalized);
+
+  if (simplifiedTransactions.length) {
+    return simplifiedTransactions;
+  }
 
   const doubleDatePattern = new RegExp(
     `(${datePattern})\\s+(${datePattern})([\\s\\S]*?)(?=(?:${datePattern})\\s+(?:${datePattern})|$)`,

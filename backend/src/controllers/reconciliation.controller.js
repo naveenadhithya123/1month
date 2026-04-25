@@ -857,7 +857,28 @@ function extractJson(raw = "") {
     throw new Error("The AI analysis did not return valid reconciliation JSON.");
   }
 
-  return JSON.parse(match[0]);
+  const jsonText = match[0];
+
+  try {
+    return JSON.parse(jsonText);
+  } catch (_error) {
+    const repaired = jsonText
+      .replace(/,\s*([}\]])/g, "$1")
+      .replace(/[\u2018\u2019]/g, "'")
+      .replace(/[\u201C\u201D]/g, '"');
+
+    try {
+      return JSON.parse(repaired);
+    } catch (_secondError) {
+      const lines = repaired
+        .split(/\r?\n/)
+        .filter((line) => !/^\s*\/\//.test(line))
+        .map((line) => line.replace(/,\s*$/g, ""))
+        .join("\n");
+
+      return JSON.parse(lines);
+    }
+  }
 }
 
 async function analyzeTexts({ invoiceText, bankText }) {
@@ -921,7 +942,22 @@ ${bankText.slice(0, 45000)}`,
     ],
   });
 
-  return enrichReconciliationResult(extractJson(raw), invoiceText, bankText);
+  try {
+    return enrichReconciliationResult(extractJson(raw), invoiceText, bankText);
+  } catch (_error) {
+    return normalizeReconciliationResult({
+      summary: "The PDFs were read, but the fallback AI response was malformed. Please try again after redeploy.",
+      matchedCount: 0,
+      mismatchCount: 0,
+      reviewCount: 0,
+      totalInvoiceAmount: 0,
+      totalPaidAmount: 0,
+      matches: [],
+      mismatches: [],
+      reviewItems: [],
+      nextSteps: ["Retry the analysis after the backend redeploy completes."],
+    });
+  }
 }
 
 export async function analyzeReconciliation(req, res) {

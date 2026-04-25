@@ -26,12 +26,6 @@ services:
         value: openai/whisper-large-v3-turbo
       - key: HF_TTS_MODEL
         value: hexgrad/Kokoro-82M
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: GEMINI_CHAT_MODEL
-        value: gemini-2.0-flash-lite
-      - key: GEMINI_BACKUP_CHAT_MODEL
-        value: gemini-2.0-flash
       - key: OCR_SPACE_API_KEY
         value: helloworld
       - key: SUPABASE_URL

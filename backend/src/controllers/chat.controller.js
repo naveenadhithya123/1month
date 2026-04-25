@@ -201,14 +201,6 @@ function mapChatError(error) {
     return "Groq fallback is not configured correctly. Please update the API key.";
   }
 
-  if (/Gemini fallback is not configured correctly/i.test(message)) {
-    return "Gemini fallback is not configured correctly. Please update the API key.";
-  }
-
-  if (/Gemini fallback is busy or out of quota/i.test(message)) {
-    return "Gemini fallback is busy or out of quota. Please wait a minute and try again.";
-  }
-
   if (/not supported by any provider/i.test(message)) {
     return "That analysis model is unavailable right now. Please try a simpler text-based question or upload a clearer text image.";
   }
@@ -217,7 +209,7 @@ function mapChatError(error) {
 }
 
 function isProviderFailureMessage(message = "") {
-  return /monthly included credits|billing hard limit|insufficient quota|incorrect api key|invalid api key|OpenAI fallback|Gemini fallback|too many requests|rate limit|resource has been exhausted|quota/i.test(
+  return /monthly included credits|billing hard limit|insufficient quota|incorrect api key|invalid api key|too many requests|rate limit|resource has been exhausted|quota/i.test(
     String(message),
   );
 }

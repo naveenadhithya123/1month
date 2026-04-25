@@ -15,7 +15,6 @@ import OpenAICompatibleClient from "openai";
 
 const HF_TOKEN = process.env.HF_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // HF Router handles vision, embeddings, speech-to-text, and text-to-speech.
 const hf = HF_TOKEN
@@ -36,8 +35,6 @@ const groq = GROQ_API_KEY
 // ── Model presets (all overridable via .env) ──────────────────────────────────
 export const MODEL_PRESETS = {
   groqChat:    process.env.GROQ_CHAT_MODEL    || "openai/gpt-oss-120b",
-  geminiChat:  process.env.GEMINI_CHAT_MODEL  || "gemini-2.0-flash-lite",
-  geminiBackupChat: process.env.GEMINI_BACKUP_CHAT_MODEL || "gemini-2.0-flash",
   vision:      process.env.HF_VISION_MODEL    || "Qwen/Qwen2.5-VL-7B-Instruct",
   embeddings:  process.env.HF_EMBEDDING_MODEL || "sentence-transformers/all-MiniLM-L6-v2",
   stt:         process.env.HF_STT_MODEL       || "openai/whisper-large-v3-turbo",
@@ -46,179 +43,6 @@ export const MODEL_PRESETS = {
 
 function ensureHF() {
   if (!hf) throw new Error("HF_TOKEN is missing in backend/.env");
-}
-
-function isQuotaErrorMessage(message = "") {
-  return /402|monthly included credits|depleted your monthly included credits|purchase pre-paid credits|subscribe to pro|get 20x more included usage|billing hard limit|insufficient quota/i.test(
-    String(message),
-  );
-}
-
-async function requestGeminiChat({
-  model,
-  messages,
-  temperature = 0.3,
-  maxTokens = 1200,
-}) {
-  const systemInstruction = messages
-    .filter((item) => item?.role === "system" && item?.content)
-    .map((item) => item.content)
-    .join("\n\n");
-
-  const contents = messages
-    .filter((item) => item?.role !== "system" && item?.content)
-    .map((item) => ({
-      role: item.role === "assistant" ? "model" : "user",
-      parts: [{ text: String(item.content) }],
-    }));
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        system_instruction: systemInstruction
-          ? { parts: [{ text: systemInstruction }] }
-          : undefined,
-        contents,
-        generationConfig: {
-          temperature,
-          maxOutputTokens: maxTokens,
-        },
-      }),
-    },
-  );
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      `${response.status} ${response.statusText || "Gemini request failed."}`;
-
-    throw new Error(message);
-  }
-
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map((part) => part?.text || "")
-    .join("")
-    .trim();
-
-  return text || "";
-}
-
-async function requestGeminiVision({
-  model,
-  question,
-  imageUrl,
-  context = "",
-  maxTokens = 900,
-}) {
-  const remote = await fetch(imageUrl);
-  if (!remote.ok) {
-    throw new Error(`Gemini image fetch failed with ${remote.status}`);
-  }
-
-  const mimeType = remote.headers.get("content-type") || "image/jpeg";
-  const imageBuffer = Buffer.from(await remote.arrayBuffer());
-  const inlineData = imageBuffer.toString("base64");
-  const prompt = context
-    ? `Study context:\n${context}\n\nQuestion:\n${question}`
-    : question;
-
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { text: prompt },
-              {
-                inline_data: {
-                  mime_type: mimeType,
-                  data: inlineData,
-                },
-              },
-            ],
-          },
-        ],
-        generationConfig: {
-          temperature: 0.2,
-          maxOutputTokens: maxTokens,
-        },
-      }),
-    },
-  );
-
-  const data = await response.json().catch(() => ({}));
-
-  if (!response.ok) {
-    const message =
-      data?.error?.message ||
-      `${response.status} ${response.statusText || "Gemini vision request failed."}`;
-
-    throw new Error(message);
-  }
-
-  const text = data?.candidates?.[0]?.content?.parts
-    ?.map((part) => part?.text || "")
-    .join("")
-    .trim();
-
-  return text || "";
-}
-
-async function chatCompletionWithGemini({
-  messages,
-  temperature = 0.3,
-  maxTokens = 1200,
-}) {
-  if (!GEMINI_API_KEY) {
-    throw new Error("Gemini fallback is not configured correctly. Please update the API key.");
-  }
-
-  try {
-    return await requestGeminiChat({
-      model: MODEL_PRESETS.geminiChat,
-      messages,
-      temperature,
-      maxTokens,
-    });
-  } catch (error) {
-    const message = String(error?.message || "");
-
-    if (/api key not valid|invalid api key|permission denied|unauthenticated|401|403/i.test(message)) {
-      throw new Error("Gemini fallback is not configured correctly. Please update the API key.");
-    }
-
-    if (/quota|rate limit|resource has been exhausted|429/i.test(message)) {
-      try {
-        return await requestGeminiChat({
-          model: MODEL_PRESETS.geminiBackupChat,
-          messages,
-          temperature,
-          maxTokens,
-        });
-      } catch (backupError) {
-        const backupMessage = String(backupError?.message || "");
-        if (/quota|rate limit|resource has been exhausted|429/i.test(backupMessage)) {
-          throw new Error("Gemini fallback is busy or out of quota. Please wait a minute and try again.");
-        }
-        throw backupError;
-      }
-    }
-
-    throw error;
-  }
 }
 
 async function chatCompletionWithGroq({
@@ -295,20 +119,7 @@ export async function visionCompletion({ question, imageUrl, context = "" }) {
     }
   }
 
-  if (GEMINI_API_KEY) {
-    try {
-      return await requestGeminiVision({
-        model: MODEL_PRESETS.geminiChat,
-        question,
-        imageUrl,
-        context,
-      });
-    } catch (_error) {
-      // Fall through to a friendly failure below.
-    }
-  }
-
-  throw new Error("That analysis model is unavailable right now. Please try a simpler text-based question or upload a clearer text image.");
+  throw new Error("HF vision is unavailable right now. Please check HF_TOKEN or upload a clearer image.");
 }
 
 // ── 3. IMAGE TEXT EXTRACTION (OCR-style via vision) ───────────────────────────
